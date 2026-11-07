@@ -38,6 +38,6 @@
 | `BousaiScope/Core/Util/KeyboardDismiss.swift` | Core/Util/KeyboardDismiss.swift | そのまま |
 | `BousaiScope/Core/Util/Formatters.swift` | Core/Util/Formatters.swift | そのまま |
 
-テスト: `BousaiScopeTests/` の HeadingTests・WaypointTests・WaypointHeightTests はそのまま、ProjectionTests は電車・山・オブジェクトの比べ合わせを ScopeViewpoint のテストに替え、SkylineTests は SceneryTests から稜線と地形の分だけを写した。
+テスト: `BousaiScopeTests/` の HeadingTests・WaypointTests はそのまま、WaypointHeightTests は受信量の分類の2行だけを新しい分類に替え、ProjectionTests は電車・山・オブジェクトの比べ合わせを ScopeViewpoint のテストに替え、SkylineTests は SceneryTests から稜線と地形の分だけを写した。
 
 ワークフロー(`.github/workflows/`)、`scripts/make_apps_json.py`、`scripts/check_local.py`、`.gitignore`、`.gitattributes` も、スマートダッシュボード v0.9.33 から写して名前を変えた。

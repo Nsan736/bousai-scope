@@ -203,8 +203,8 @@ final class WaypointHeightTests: XCTestCase {
         XCTAssertEqual(items.first { $0.name == "lon" }?.value, "139.745433")
         XCTAssertEqual(items.first { $0.name == "lat" }?.value, "35.658581")
         XCTAssertEqual(items.first { $0.name == "outtype" }?.value, "JSON")
-        // 受信量は「スコープ」に数える(地図タイルとは分ける)
-        XCTAssertEqual(UsageCategory.from(url: url), .scope)
-        XCTAssertEqual(UsageCategory.from(url: URL(string: "https://cyberjapandata.gsi.go.jp/xyz/pale/10/909/403.png")), .mapTiles)
+        // 受信量は「標高」に数える(地形のタイルとは分ける)
+        XCTAssertEqual(UsageCategory.from(url: url), .elevation)
+        XCTAssertEqual(UsageCategory.from(url: URL(string: "https://cyberjapandata.gsi.go.jp/xyz/pale/10/909/403.png")), .terrain)
     }
 }
