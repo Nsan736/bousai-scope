@@ -68,4 +68,4 @@ data-sources.md にまとめた。とくに:
 ## 作業の進め方(要点)
 
 - 調査 → 実装 → テスト → `python scripts/check_local.py` → docs の更新 → コミット → push → `gh workflow run ci.yml --ref main` を1回 → 成功したコミットにタグ → release と apps.json の反映を確認 → 報告
-- v0.1.0 の Actions の実行: 報告に書く
+- v0.1.0 の Actions の実行: ci 2回(1回目は、写したテストが古い受信量の分類を使っていてコンパイルエラー)、release 1回
