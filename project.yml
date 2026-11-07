@@ -1,0 +1,58 @@
+name: BousaiScope
+options:
+  bundleIdPrefix: com.nsan
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: ja
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
+targets:
+  BousaiScope:
+    type: application
+    platform: iOS
+    sources:
+      - path: BousaiScope
+    info:
+      path: BousaiScope/Info.plist
+      properties:
+        CFBundleDisplayName: 防災スコープ
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: ja
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocationWhenInUseUsageDescription: 登録した地点や避難場所の方角と距離を、現在地から計算するために位置情報を使います。位置は端末の外に送りません(標高を調べるときだけ、その座標を国土地理院の標高APIに送ります)。
+        NSMotionUsageDescription: カメラの映像に方角と高さを重ねるために、端末の向き(モーションデータ)を使います。
+        NSCameraUsageDescription: 登録した地点や避難場所の方向を、カメラの映像に重ねて表示するためにカメラを使います。映像は保存も送信もしません。
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nsan.bousaiscope
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_PREVIEWS: YES
+  BousaiScopeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: BousaiScopeTests
+    dependencies:
+      - target: BousaiScope
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.nsan.bousaiscope.tests
+schemes:
+  BousaiScope:
+    build:
+      targets:
+        BousaiScope: all
+        BousaiScopeTests: [test]
+    test:
+      targets:
+        - BousaiScopeTests
