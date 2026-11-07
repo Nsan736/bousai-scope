@@ -1,0 +1,34 @@
+{
+  "name": "防災スコープ (Nsan736)",
+  "identifier": "com.nsan.bousaiscope.source",
+  "sourceURL": "https://raw.githubusercontent.com/Nsan736/bousai-scope/main/apps.json",
+  "apps": [
+    {
+      "name": "防災スコープ",
+      "bundleIdentifier": "com.nsan.bousaiscope",
+      "developerName": "Nsan736",
+      "subtitle": "防災情報をカメラで見る",
+      "localizedDescription": "カメラの映像に方角・距離・高さを重ねて、避難場所や浸水の想定などの防災情報を見るアプリ。通信量を少なくする設計。",
+      "iconURL": "https://raw.githubusercontent.com/Nsan736/bousai-scope/main/icon.png",
+      "tintColor": "E8740C",
+      "screenshotURLs": [],
+      "versions": [
+        {
+          "version": "0.1.0",
+          "date": "2026-11-07T08:07:37Z",
+          "localizedDescription": "v0.1.0",
+          "downloadURL": "https://github.com/Nsan736/bousai-scope/releases/download/v0.1.0/BousaiScope.ipa",
+          "size": 481908,
+          "minOSVersion": "17.0"
+        }
+      ],
+      "version": "0.1.0",
+      "versionDate": "2026-11-07T08:07:37Z",
+      "versionDescription": "v0.1.0",
+      "downloadURL": "https://github.com/Nsan736/bousai-scope/releases/download/v0.1.0/BousaiScope.ipa",
+      "size": 481908,
+      "minOSVersion": "17.0"
+    }
+  ],
+  "news": []
+}
