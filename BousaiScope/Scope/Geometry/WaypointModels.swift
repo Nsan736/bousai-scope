@@ -1,0 +1,464 @@
+import CoreGraphics
+import Foundation
+import SwiftUI
+
+/// 地点の標高の状態
+enum WaypointElevationState: String, Codable {
+    /// まだ取得していない(登録したときに取れなかった、v0.9.14 以前に保存した地点)。Wi-Fi接続中に自動で取得する。
+    case unset
+    /// 国土地理院の標高APIで取得した
+    case fetched
+    /// 手で入力した(自動では取り直さない)
+    case manual
+    /// 標高のデータがない場所(海上、国外など)。自動では取り直さない。
+    case noData
+}
+
+/// 登録した地点
+struct Waypoint: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var name: String
+    var latitude: Double
+    var longitude: Double
+    /// WaypointPalette の番号
+    var colorIndex = 0
+    var memo = ""
+    /// ホームのカードに出す地点(1つだけ)
+    var isPinned = false
+    /// 非表示(削除せずに、カメラ表示・コンパス表示・地図・ホームの「一番近い地点」から外す)
+    var isHidden = false
+    /// 標高(m)。nil は未設定。
+    var groundElevation: Double? = nil
+    var elevationState: WaypointElevationState = .unset
+    /// 地面からの高さ(m)。タワーの展望台なら250など。
+    var heightAboveGround = 0.0
+
+    /// 地点の高さ(標高+地面からの高さ)。標高が未設定なら nil。
+    var altitude: Double? { groundElevation.map { $0 + heightAboveGround } }
+
+    init(id: UUID = UUID(), name: String, latitude: Double, longitude: Double, colorIndex: Int = 0, memo: String = "",
+         isPinned: Bool = false, isHidden: Bool = false, groundElevation: Double? = nil,
+         elevationState: WaypointElevationState = .unset, heightAboveGround: Double = 0) {
+        self.id = id
+        self.name = name
+        self.latitude = latitude
+        self.longitude = longitude
+        self.colorIndex = colorIndex
+        self.memo = memo
+        self.isPinned = isPinned
+        self.isHidden = isHidden
+        self.groundElevation = groundElevation
+        self.elevationState = elevationState
+        self.heightAboveGround = heightAboveGround
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, latitude, longitude, colorIndex, memo, isPinned, isHidden, groundElevation, elevationState, heightAboveGround
+    }
+
+    /// 以前の版で保存した地点(表示・非表示と高さの項目がない)も読めるように、ない項目は初期値にする。
+    /// 保存済みの地点は「表示」、標高は「未設定」として引き継ぐ。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        latitude = try c.decode(Double.self, forKey: .latitude)
+        longitude = try c.decode(Double.self, forKey: .longitude)
+        colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
+        memo = try c.decodeIfPresent(String.self, forKey: .memo) ?? ""
+        isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        isHidden = try c.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
+        groundElevation = try c.decodeIfPresent(Double.self, forKey: .groundElevation)
+        // 知らない値(新しい版で増えた状態など)は未設定として読む
+        elevationState = (try? c.decodeIfPresent(WaypointElevationState.self, forKey: .elevationState)) ?? .unset
+        heightAboveGround = try c.decodeIfPresent(Double.self, forKey: .heightAboveGround) ?? 0
+    }
+}
+
+/// 地点の一覧の絞り込み
+enum WaypointListFilter: String, CaseIterable, Identifiable {
+    case visible
+    case all
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .visible: return "表示中だけ"
+        case .all: return "すべて"
+        }
+    }
+
+    static func apply(_ waypoints: [Waypoint], filter: WaypointListFilter) -> [Waypoint] {
+        filter == .all ? waypoints : waypoints.filter { !$0.isHidden }
+    }
+}
+
+enum WaypointPalette {
+    static let names = ["青", "赤", "緑", "オレンジ", "紫", "ピンク", "水色", "黄"]
+    static let colors: [Color] = [
+        Color(red: 0.26, green: 0.29, blue: 0.80), .red, .green, .orange, .purple, .pink, .cyan, .yellow,
+    ]
+
+    static func color(_ index: Int) -> Color {
+        colors[min(max(index, 0), colors.count - 1)]
+    }
+}
+
+/// 最後に分かった現在地(一覧とホームの距離の表示用。測位はしない)
+struct WaypointOrigin: Codable, Equatable {
+    var latitude: Double
+    var longitude: Double
+    var time: Date
+    /// そのときの自分の高さ(m)。一覧の高低差の表示に使う。分からなければ nil。
+    var height: Double? = nil
+}
+
+/// 方位と距離の計算
+enum WaypointMath {
+    static let earthRadius = 6_371_000.0
+
+    /// 2点間の距離(m)
+    static func distance(fromLatitude lat1: Double, longitude lon1: Double, toLatitude lat2: Double, longitude lon2: Double) -> Double {
+        let rad = Double.pi / 180
+        let dLat = (lat2 - lat1) * rad
+        let dLon = (lon2 - lon1) * rad
+        let a = sin(dLat / 2) * sin(dLat / 2) + cos(lat1 * rad) * cos(lat2 * rad) * sin(dLon / 2) * sin(dLon / 2)
+        return earthRadius * 2 * atan2(a.squareRoot(), (1 - a).squareRoot())
+    }
+
+    /// 現在地から地点への方位角(真北基準、時計回り、0〜360度)
+    static func bearing(fromLatitude lat1: Double, longitude lon1: Double, toLatitude lat2: Double, longitude lon2: Double) -> Double {
+        let rad = Double.pi / 180
+        let dLon = (lon2 - lon1) * rad
+        let y = sin(dLon) * cos(lat2 * rad)
+        let x = cos(lat1 * rad) * sin(lat2 * rad) - sin(lat1 * rad) * cos(lat2 * rad) * cos(dLon)
+        return normalized(atan2(y, x) / rad)
+    }
+
+    static func normalized(_ degrees: Double) -> Double {
+        let value = degrees.truncatingRemainder(dividingBy: 360)
+        return value < 0 ? value + 360 : value
+    }
+
+    /// −180〜180度の差(to − from)。正なら右。
+    static func difference(from: Double, to: Double) -> Double {
+        let value = normalized(to - from)
+        return value > 180 ? value - 360 : value
+    }
+
+    /// 8方位の名前
+    static func compassPoint(_ degrees: Double) -> String {
+        let points = ["北", "北東", "東", "南東", "南", "南西", "西", "北西"]
+        return points[Int((normalized(degrees) + 22.5) / 45) % 8]
+    }
+
+    /// 「850m」「2.3km」「120km」
+    static func distanceText(_ meters: Double) -> String {
+        if meters < 1000 { return "\(Int(meters.rounded()))m" }
+        if meters < 100_000 { return String(format: "%.1fkm", meters / 1000) }
+        return "\(Int((meters / 1000).rounded()))km"
+    }
+
+    /// 「北東 2.3km」
+    static func summary(bearing: Double, distance: Double) -> String {
+        "\(compassPoint(bearing)) \(distanceText(distance))"
+    }
+
+    /// 高低差の表示「↑120m」「↓35m」。1m未満は「高さ同じ」。
+    static func heightText(_ difference: Double) -> String {
+        let meters = Int(difference.rounded())
+        if meters > 0 { return "↑\(meters)m" }
+        if meters < 0 { return "↓\(-meters)m" }
+        return "高さ同じ"
+    }
+
+    /// 「2.3km ↑120m」(高低差が分からなければ距離だけ)
+    static func distanceText(_ meters: Double, heightDifference: Double?) -> String {
+        guard let heightDifference else { return distanceText(meters) }
+        return "\(distanceText(meters)) \(heightText(heightDifference))"
+    }
+}
+
+/// 地点の高さと、見上げる・見下ろす角度(仰角)
+enum WaypointElevation {
+    static let earthRadius = 6_371_000.0
+    /// 大気の屈折の係数。光が地表に沿って少し曲がるので、地球の丸みによる見かけの低下が、この割合だけ小さくなる。
+    static let refraction = 0.13
+
+    /// 地球の丸みによる見かけの低下(m)。距離²÷(2×地球の半径) を、大気の屈折の分(1−0.13)だけ小さくしたもの。
+    /// 1kmで約7cm、10kmで約6.8m、100kmで約683m。
+    static func curvatureDrop(distance: Double) -> Double {
+        distance * distance / (2 * earthRadius) * (1 - refraction)
+    }
+
+    /// 仰角(度)。上向きが正。
+    /// 仰角 = atan((地点の高さ − 自分の高さ − 見かけの低下) / 水平距離)
+    static func angle(targetAltitude: Double, observerAltitude: Double, distance: Double) -> Double {
+        let horizontal = max(distance, 1)
+        let rise = targetAltitude - observerAltitude - curvatureDrop(distance: horizontal)
+        return atan(rise / horizontal) * 180 / .pi
+    }
+}
+
+/// 自分の高さの決め方(設定)
+enum ObserverHeightSource: String, CaseIterable, Identifiable {
+    /// 現在地の地面の標高(国土地理院の標高API)+ 手の高さ。取れないときはGPSの高度。
+    case groundPlusHand
+    /// GPSの高度(CLLocation.altitude)
+    case gps
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .groundPlusHand: return "地面の標高+手の高さ"
+        case .gps: return "GPSの高度"
+        }
+    }
+}
+
+/// 自分の高さ(m)と、その出どころ
+struct ObserverHeight: Equatable {
+    enum Method: Equatable {
+        case ground
+        case gps
+    }
+
+    var meters: Double
+    var method: Method
+
+    /// 設定と、今わかっている値から決める。地面の標高が取れないときはGPSの高度を使う。どちらもなければ nil。
+    static func resolve(source: ObserverHeightSource, gpsAltitude: Double?, groundElevation: Double?, handHeight: Double) -> ObserverHeight? {
+        switch source {
+        case .groundPlusHand:
+            if let groundElevation { return ObserverHeight(meters: groundElevation + handHeight, method: .ground) }
+            return gpsAltitude.map { ObserverHeight(meters: $0, method: .gps) }
+        case .gps:
+            return gpsAltitude.map { ObserverHeight(meters: $0, method: .gps) }
+        }
+    }
+
+    /// 精度の表示の近くに出す文字(「自分の高さ 25m(地面の標高+手の高さ1.5m)」)
+    func text(handHeight: Double, source: ObserverHeightSource) -> String {
+        let value = "自分の高さ \(Int(meters.rounded()))m"
+        switch method {
+        case .ground: return value + "(地面の標高+手の高さ" + String(format: "%.1fm", handHeight) + ")"
+        case .gps: return value + (source == .gps ? "(GPSの高度)" : "(GPSの高度。地面の標高が取れないため)")
+        }
+    }
+}
+
+/// カメラ越しの印の大きさ。調整するときは、ここだけを変える。
+enum WaypointMarkStyle {
+    /// 外側のリングの直径(距離に関係なく一定)
+    static let ringDiameter: CGFloat = 44
+    static let ringLineWidth: CGFloat = 3
+    /// この距離以下で、内側の円がリングをほぼ満たす
+    static let nearDistance = 10.0
+    static let nearFraction = 0.95
+    /// この距離以上で、内側の円が最小になる(それより遠くても、これ以上は小さくしない)
+    static let farDistance = 15_000.0
+    static let farFraction = 0.10
+
+    /// 内側の円の大きさ(リングの内径に対する割合)。距離の対数で決める(距離が1桁変わるごとに一定の量だけ変わる)。
+    static func innerFraction(distance: Double) -> Double {
+        if distance <= nearDistance { return nearFraction }
+        if distance >= farDistance { return farFraction }
+        let t = (log10(distance) - log10(nearDistance)) / (log10(farDistance) - log10(nearDistance))
+        return nearFraction + (farFraction - nearFraction) * t
+    }
+
+    static func innerDiameter(distance: Double) -> CGFloat {
+        (ringDiameter - ringLineWidth * 2) * CGFloat(innerFraction(distance: distance))
+    }
+}
+
+/// 3次元のベクトル。基準の座標系は、x=真北、y=西、z=上(CMAttitudeReferenceFrame.xTrueNorthZVertical)。
+struct Vector3: Equatable {
+    var x: Double
+    var y: Double
+    var z: Double
+
+    static func dot(_ a: Vector3, _ b: Vector3) -> Double { a.x * b.x + a.y * b.y + a.z * b.z }
+
+    var length: Double { (x * x + y * y + z * z).squareRoot() }
+
+    var unit: Vector3 {
+        let l = length
+        return l > 0 ? Vector3(x: x / l, y: y / l, z: z / l) : self
+    }
+
+    func mixed(with other: Vector3, weight: Double) -> Vector3 {
+        Vector3(x: x + (other.x - x) * weight, y: y + (other.y - y) * weight, z: z + (other.z - z) * weight)
+    }
+
+    static func cross(_ a: Vector3, _ b: Vector3) -> Vector3 {
+        Vector3(x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x)
+    }
+
+    func scaled(_ factor: Double) -> Vector3 {
+        Vector3(x: x * factor, y: y * factor, z: z * factor)
+    }
+
+    func minus(_ other: Vector3) -> Vector3 {
+        Vector3(x: x - other.x, y: y - other.y, z: z - other.z)
+    }
+
+    /// 鉛直のまわりに、上から見て時計回りに degrees 度回す(方角が degrees 増える)
+    func rotatedClockwise(by degrees: Double) -> Vector3 {
+        let t = degrees * .pi / 180
+        return Vector3(x: x * cos(t) + y * sin(t), y: y * cos(t) - x * sin(t), z: z)
+    }
+}
+
+/// 端末の向き(縦向きに持ったとき)。基準の座標系で表した、画面の右・画面の上・背面カメラの向き。
+struct CameraAttitude: Equatable {
+    var right: Vector3
+    var up: Vector3
+    var forward: Vector3
+
+    /// CMRotationMatrix(基準の座標系のベクトルを端末の座標系に移す行列)から作る。
+    /// 行列の各行が、端末のX軸(画面の右)・Y軸(画面の上)・Z軸(画面の手前)を基準の座標系で表したものになる。
+    /// 背面カメラは −Z の向き。
+    init(m11: Double, m12: Double, m13: Double, m21: Double, m22: Double, m23: Double, m31: Double, m32: Double, m33: Double) {
+        right = Vector3(x: m11, y: m12, z: m13)
+        up = Vector3(x: m21, y: m22, z: m23)
+        forward = Vector3(x: -m31, y: -m32, z: -m33)
+    }
+
+    init(right: Vector3, up: Vector3, forward: Vector3) {
+        self.right = right
+        self.up = up
+        self.forward = forward
+    }
+
+    /// 1回の更新でこれより大きく変わったら、混ぜずに新しい値を使う(再開の直後など。混ぜると、逆向きに近いベクトルの平均で向きが崩れる)
+    static let smoothingSnapDegrees = 45.0
+
+    /// センサーの値を軽く平滑化する(ベクトルのまま混ぜるので、0度/360度の境目の問題が起きない)。
+    /// 混ぜたあとは、背面の向きを基準に、右と上を直交させ直す(3つを別々に混ぜると直交が崩れ、少しずつ向きがゆがむため)
+    func smoothed(toward new: CameraAttitude, weight: Double) -> CameraAttitude {
+        let limit = cos(Self.smoothingSnapDegrees * .pi / 180)
+        guard Vector3.dot(forward, new.forward) > limit, Vector3.dot(right, new.right) > limit else { return new }
+        let f = forward.mixed(with: new.forward, weight: weight).unit
+        let mixedRight = right.mixed(with: new.right, weight: weight)
+        let r = mixedRight.minus(f.scaled(Vector3.dot(mixedRight, f))).unit
+        // 端末の軸は右手系(右 × 上 = 画面の手前 = 背面の逆)なので、上 = 右 × 背面
+        return CameraAttitude(right: r, up: Vector3.cross(r, f), forward: f)
+    }
+
+    /// 鉛直のまわりに、上から見て時計回りに degrees 度回した姿勢(方角だけが変わり、仰角と傾きは変わらない)
+    func rotatedClockwise(by degrees: Double) -> CameraAttitude {
+        CameraAttitude(right: right.rotatedClockwise(by: degrees), up: up.rotatedClockwise(by: degrees),
+                       forward: forward.rotatedClockwise(by: degrees))
+    }
+
+    /// 左右の傾き(度)。縦に持って水平なら0、右が下がると正
+    var roll: Double {
+        atan2(-right.z, up.z) * 180 / .pi
+    }
+
+    /// カメラが向いている方位(真北基準)。東は −y。
+    var azimuth: Double {
+        WaypointMath.normalized(atan2(-forward.y, forward.x) * 180 / .pi)
+    }
+
+    /// カメラの仰角(度)。水平で0、真上で90。
+    var elevation: Double {
+        asin(max(-1, min(1, forward.z))) * 180 / .pi
+    }
+}
+
+/// カメラの写る範囲と、画面上の位置への変換
+enum WaypointProjection {
+    /// 画面に写る範囲(画角の半分の正接)。
+    /// - fieldOfView: AVCaptureDevice の activeFormat.videoFieldOfView(映像の長辺の画角、度)
+    /// - videoAspect: 映像の長辺 ÷ 短辺(16:9 なら 1.78)
+    /// 縦向きの画面に、映像を画面いっぱい(aspectFill)に表示する前提。映像の長辺が画面の縦になる。
+    static func tangents(fieldOfView: Double, videoAspect: Double, viewSize: CGSize) -> (horizontal: Double, vertical: Double) {
+        let tanLong = tan(fieldOfView / 2 * .pi / 180)
+        let tanShort = tanLong / max(videoAspect, 0.01)
+        let viewAspect = Double(viewSize.height / max(viewSize.width, 1))
+        if viewAspect >= videoAspect {
+            // 画面のほうが縦長: 縦は映像の全体が写り、横は切り取られる
+            return (tanLong / viewAspect, tanLong)
+        }
+        // 画面のほうが横に広い: 横は映像の全体が写り、縦は切り取られる
+        return (tanShort, tanShort * viewAspect)
+    }
+
+    /// 映像の長辺の画角(度)。activeFormat.videoFieldOfView は歪みの補正の前の値なので、補正(geometricDistortionCorrection)が
+    /// 効いているときは、補正のあとの値(geometricDistortionCorrectedVideoFieldOfView)を使う。ズームしていれば、その分だけ狭くする
+    static func effectiveFieldOfView(format: Double, distortionCorrected: Double?, zoom: Double) -> Double {
+        let base = distortionCorrected.flatMap { $0 > 0 ? $0 : nil } ?? format
+        let half = atan(tan(base / 2 * .pi / 180) / max(zoom, 1)) * 180 / .pi
+        return half * 2
+    }
+
+    /// 画面の中央での、角度1°あたりの長さ(pt)。左右と上下(縦の目盛り)
+    static func pointsPerDegree(tangents: (horizontal: Double, vertical: Double), viewSize: CGSize) -> (horizontal: Double, vertical: Double) {
+        let one = tan(Double.pi / 180)
+        return (Double(viewSize.width) / 2 / max(tangents.horizontal, 0.0001) * one,
+                Double(viewSize.height) / 2 / max(tangents.vertical, 0.0001) * one)
+    }
+
+    /// 地点の方向を、画面上の位置に変換する。elevation は仰角(度。0なら地平線上)。
+    /// カメラの後ろ側にあるときと、画面の外にあるときは nil。
+    static func point(bearing: Double, elevation: Double = 0, attitude: CameraAttitude,
+                      tangents: (horizontal: Double, vertical: Double), viewSize: CGSize) -> CGPoint? {
+        let rad = bearing * .pi / 180
+        let up = elevation * .pi / 180
+        // 基準の座標系(x=北、y=西、z=上)での地点の方向
+        let target = Vector3(x: cos(up) * cos(rad), y: -cos(up) * sin(rad), z: sin(up))
+        let depth = Vector3.dot(target, attitude.forward)
+        guard depth > 0.01 else { return nil }
+        let nx = Vector3.dot(target, attitude.right) / depth / max(tangents.horizontal, 0.0001)
+        let ny = Vector3.dot(target, attitude.up) / depth / max(tangents.vertical, 0.0001)
+        guard abs(nx) <= 1, abs(ny) <= 1 else { return nil }
+        return CGPoint(x: viewSize.width / 2 * (1 + nx), y: viewSize.height / 2 * (1 - ny))
+    }
+}
+
+/// カメラ越しの表示と、コンパス表示に出す地点(現在地からの方位と距離を計算したもの)
+struct WaypointTarget: Equatable, Identifiable {
+    var waypoint: Waypoint
+    var bearing: Double
+    var distance: Double
+    var id: UUID { waypoint.id }
+
+    /// 遠い順(描くときに、近い地点が手前になるように)
+    static func make(_ waypoints: [Waypoint], latitude: Double, longitude: Double) -> [WaypointTarget] {
+        waypoints.map { waypoint in
+            WaypointTarget(waypoint: waypoint,
+                           bearing: WaypointMath.bearing(fromLatitude: latitude, longitude: longitude,
+                                                         toLatitude: waypoint.latitude, longitude: waypoint.longitude),
+                           distance: WaypointMath.distance(fromLatitude: latitude, longitude: longitude,
+                                                           toLatitude: waypoint.latitude, longitude: waypoint.longitude))
+        }
+        .sorted { $0.distance > $1.distance }
+    }
+}
+
+/// 「35.68, 139.76」のように貼り付けた座標の解析
+enum WaypointCoordinateParser {
+    /// 緯度、経度の順の2つの数。区切りはカンマ(全角も)、空白、タブ。かっこや「°」は無視する。
+    /// 範囲の外(緯度は±90、経度は±180)や、数が2つでないときは nil。
+    static func parse(_ text: String) -> (latitude: Double, longitude: Double)? {
+        var cleaned = ""
+        for character in text {
+            switch character {
+            case "0"..."9", ".", "-", "+": cleaned.append(character)
+            case "０"..."９":
+                if let value = character.wholeNumberValue { cleaned.append(String(value)) }
+            case "．": cleaned.append(".")
+            case "−", "－": cleaned.append("-")
+            default: cleaned.append(" ")
+            }
+        }
+        let numbers = cleaned.split(separator: " ").map { Double($0) }
+        guard numbers.count == 2, let latitude = numbers[0], let longitude = numbers[1],
+              abs(latitude) <= 90, abs(longitude) <= 180 else { return nil }
+        return (latitude, longitude)
+    }
+}
