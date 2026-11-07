@@ -127,7 +127,7 @@ struct ScopeSightView: View {
         guard let coordinate = tracker.coordinate, let attitude = tracker.attitude else { return nil }
         let tangents = WaypointProjection.tangents(fieldOfView: env.camera.fieldOfView, videoAspect: env.camera.videoAspect, viewSize: size)
         return ScopeViewpoint(latitude: coordinate.latitude, longitude: coordinate.longitude,
-                              eyeAltitude: env.settings.scopeUsesHeight ? observer?.meters : nil, attitude: attitude, tangents: tangents)
+                              eyeAltitude: observer?.meters, attitude: attitude, tangents: tangents)
     }
 
     /// 方角の補正で合わせる目印(表示している印)
